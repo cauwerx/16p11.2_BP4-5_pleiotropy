@@ -1,0 +1,106 @@
+# EXPOSURES = ["ALT", "CA_N18", "CREAC", "HDL", "CA_I10", "IGF1", "CA_M19", "SHBG", "CA_E10", "TRI", "WHRADJBMI", "ALB", "CA_G47", "CA_J45", "CA_I44", "PR", "CA_20002_1473", "NEUTRO", "URATE", "CA_I35", "BMR", "DBP", "EOSINO", "LYMPH"]
+# OUTCOMES = ["CA_BMI", "CA_HEIGHT", "CA_EDUAGE", "CA_TDI"]
+
+OUTCOMES = ["ALT", "CA_N18", "CREAC", "HDL", "CA_I10", "IGF1", "CA_M19", "SHBG", "CA_E10", "TRI", "WHRADJBMI", "ALB", "CA_G47", "CA_J45", "CA_I44", "PR", "CA_20002_1473", "NEUTRO", "URATE", "CA_I35", "BMR", "DBP", "EOSINO", "LYMPH"]
+EXPOSURES = ["CA_BMI", "CA_HEIGHT", "CA_EDUAGE", "CA_TDI"]
+
+
+### Setting paths to GWAS summary statistics in .ma format and to output folder
+path_to_ma_files = "../GWAS/"
+path_to_output = "../{expo_trait}_to_{outcome_trait}/"
+
+# Rule to identify the files
+rule all:
+    input:
+        expand(path_to_output + "{expo_trait}_to_{outcome_trait}_TSMR_result.tsv", 
+               expo_trait=EXPOSURES, 
+               outcome_trait=OUTCOMES)
+        
+rule select_gwas_snps:
+    input:
+        path_to_ma_files + "{expo_trait}_gwas_summary_uk10kck.ma"
+    output:
+        path_to_output + "{expo_trait}_snps.txt"
+    resources:
+        time="00:05:00",
+        nodes=1,
+        cpus=1,
+        mem="2GB"
+    shell:
+        "awk '{{if ($7 < 5e-8) {{ print $1 }} }}' {input} > {output}"
+
+rule harmonize_snps:
+    input:
+        path_to_output + "{expo_trait}_snps.txt",
+        path_to_ma_files + "{outcome_trait}_gwas_summary_uk10kck.ma"
+    output:
+        path_to_output + "{expo_trait}_to_{outcome_trait}_snps.txt"
+    resources:
+        time="00:10:00",
+        nodes=1,
+        cpus=1,
+        mem="10GB"
+    script:
+        "scripts/harmonize_snps.py"
+
+rule clump_harmonized_snps:
+    input:
+        gwas = path_to_ma_files + "{expo_trait}_gwas_summary_uk10kck.ma",
+        expo_snps = path_to_output + "{expo_trait}_to_{outcome_trait}_snps.txt",
+        bfile = "../uk10k.autosomal.bed"
+    params:
+        bfile = "../uk10k.autosomal",
+        out = path_to_output + "{expo_trait}_to_{outcome_trait}_clump"
+    output:
+        clump_input = temp("{expo_trait}_to_{outcome_trait}_snp_pval.txt"),
+        clump_output = temp(path_to_output + "{expo_trait}_to_{outcome_trait}_clump.clumped"),
+        clump_log = temp(path_to_output + "{expo_trait}_to_{outcome_trait}_clump.log"),
+        clump_nosex = temp(path_to_output + "{expo_trait}_to_{outcome_trait}_clump.nosex"),
+        clumped_expo_snps = path_to_output + "{expo_trait}_to_{outcome_trait}_clumped_snps.txt"
+    resources:
+        time="00:10:00",
+        nodes=1,
+        cpus=1,
+        mem="8GB"
+    shell:
+        """
+        awk {{'print $1"\t"$7'}} {input.gwas} > {output.clump_input}
+
+        plink --bfile {params.bfile} --extract {input.expo_snps} --clump {output.clump_input} --clump-r2 0.01 --clump-field 'p' --out {params.out}
+
+        awk '$3 ~ /^rs/ {{print $3 }}' {output.clump_output} > {output.clumped_expo_snps}
+        """
+
+rule prepare_MR_data:
+    input:
+        expo_df = path_to_ma_files + "{expo_trait}_gwas_summary_uk10kck.ma",
+        outcome_df = path_to_ma_files + "{outcome_trait}_gwas_summary_uk10kck.ma",
+        snps = path_to_output + "{expo_trait}_to_{outcome_trait}_clumped_snps.txt"
+    output:
+        path_to_output + "{expo_trait}_to_{outcome_trait}_MR_data.tsv"
+    resources:
+        time="00:10:00",
+        nodes=1,
+        cpus=1,
+        mem="10GB"
+    script:
+        "scripts/prepare_MR_data.R"
+
+# Rule to process the files
+rule process_mr_data:
+    input:
+        mr_data = path_to_output + "{expo_trait}_to_{outcome_trait}_MR_data.tsv",
+        HLA_snps = "../HLA_uk10k_rsids.txt"
+    params:
+        EXPNAME = "{expo_trait}",
+        OUTNAME = "{outcome_trait}"
+    output:
+        path_to_output + "{expo_trait}_to_{outcome_trait}_TSMR_result.tsv",
+        path_to_output + "{expo_trait}_to_{outcome_trait}_TSMR_result_plots.pdf"
+    resources:
+        time="00:10:00",
+        nodes=1,
+        cpus=1,
+        mem="4GB"
+    script:
+        "scripts/run_TSMR.R"

@@ -1,0 +1,58 @@
+import numpy as np
+import pandas as pd
+
+TRAITS = ["CA_I10", "CA_E10", "CA_M17", "CA_M19", "CA_N18", "CA_G47", "CA_J45", "CA_I48", "CA_I44", "CA_20002_1473", "CA_I35"]
+
+PATH_TRAIT_DIC = {"CA_I10":"../I10.gwas.imputed_v3.both_sexes.tsv.bgz",
+                  "CA_E10":"../E10.gwas.imputed_v3.both_sexes.tsv.bgz",
+                  "CA_M17":"../M17.gwas.imputed_v3.both_sexes.tsv.bgz",
+                  "CA_M19":"../M19.gwas.imputed_v3.both_sexes.tsv.bgz",
+                  "CA_N18":"../N18.gwas.imputed_v3.both_sexes.tsv.bgz",
+                  "CA_G47":"../G47.gwas.imputed_v3.both_sexes.tsv.bgz", 
+                  "CA_J45":"../J45.gwas.imputed_v3.both_sexes.tsv.bgz",
+                  "CA_I48":"../I48.gwas.imputed_v3.both_sexes.tsv.bgz", 
+                  "CA_I44":"../I44.gwas.imputed_v3.both_sexes.tsv.bgz", 
+                  "CA_20002_1473":"../20002_1473.gwas.imputed_v3.both_sexes.tsv.bgz",
+                  "CA_I35":"../I35.gwas.imputed_v3.both_sexes.tsv.bgz"}
+
+path_to_output = "../GWAS/"
+
+rule all:
+    input:
+        expand(path_to_output + "{trait}_gwas_summary_uk10kck.ma", trait = TRAITS),
+
+rule format_ma:
+    input: 
+        lambda wildcards: PATH_TRAIT_DIC[wildcards.trait]
+    output:
+        temp(path_to_output + "{trait}_gwas_summary.ma")
+    threads: 1
+    resources:
+        mem_mb = 20000
+    script:
+        "scripts/prepare_neale_gwas_ma_format.py"
+
+rule variant_check:
+    input: 
+        gwas = path_to_output + "{trait}_gwas_summary.ma"
+    params:
+        uk10k = "../uk10k.autosomal",
+        bim_file = "{trait}_snps_uk10k"
+    output:
+        out = path_to_output + "{trait}_gwas_summary_uk10kck.ma",
+        snps = temp("snps_{trait}"),
+        bim_file = temp("{trait}_snps_uk10k.bim"),
+        log = temp("{trait}_snps_uk10k.log"),
+        nosex = temp("{trait}_snps_uk10k.nosex")
+    threads: 1
+    resources:
+        mem_mb = 8000
+    shell:
+        """
+        awk '{{print $1}}' {input.gwas} > {output.snps}
+
+        plink --bfile {params.uk10k} --extract {output.snps} --out {params.bim_file} --make-just-bim 
+
+        python3 scripts/strand_check.py -g {input.gwas} -r {output.bim_file} -o {output.out}
+
+        """
